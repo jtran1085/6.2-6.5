@@ -12,24 +12,53 @@
 #include <stdbool.h>
 #include <ctype.h>
 
-#include "slist.h"
 #include "tree.h"
 #include "utils.h"
+
 #define PRINTPREVIOUS_YES 1
 #define PRINTPREVIOUS_NO 0
 #define PRINTPREVIOUS_NEWGROUP 2
+#define MIN_LINENO_MEM 30
 
+static bool FREQ_SORT  = false;
+static bool FIRST_N = false;
+static int N_CHARS = 2;
 //-------------------------------------------------
-tnode* tnode_create(const char* word) {
+tnode* tnode_create(const char* word, int line_num) {
   tnode* p = (tnode*)malloc(sizeof(tnode));
   p->word = strdup(word);    // copy of word allocated on heap
   p->count = 1;
-  slist* lines = slist_create();//list of line numbers
+  p->line_node = inode_create(line_num);
   p->left = NULL;
   p->right = NULL;
   
   return p;
 }
+
+inode* inode_create(int line_num) {
+  inode* p = (inode*)malloc(sizeof(inode));
+  p->line_num = line_num;
+  p->next = NULL;
+  return p;
+}
+
+void inode_append(inode* head, int line_num) {
+  inode* p = head;
+  while(p->next != NULL) {p= p->next;}
+  if(p->line_num != line_num){
+    inode* q = inode_create(line_num);
+    p->next = q;
+  }
+}
+
+void inode_delete(inode* p){
+  while (p!= NULL){
+    inode* q = p;
+    p = p -> next;
+    free(q);
+  }
+}
+
 
 //====================================================================
 void tnode_delete(tnode* p) {
@@ -73,16 +102,54 @@ bool tree_empty(tree* t)  { return t->size == 0; }
 size_t tree_size(tree* t) { return t->size; }
 
 //====================================================================
-static tnode* tree_addnode(tree* t, tnode** p, const char* word) {
+/*static tnode* tree_addnode(tree* t, tnode** p, const char* word, int line_num) {
   int compare;
   
   if (*p == NULL) {
-    *p = tnode_create(word);
+    *p = tnode_create(word, line_num);
   } else if ((compare = strcmp(word, (*p)->word)) == 0) {
     (*p)->count++;
-  } else if (compare < 0) { tree_addnode(t, &(*p)->left, word);
+    size_t mem = strlen((*p)->lines);
+    if(mem % MIN_LINENO_MEM < 5) {
+      char* q = (char*)malloc(mem+MIN_LINENO_MEM);
+      strcpy(q, (*p)->lines);
+      (*p)->lines = q;
+      free((*p)->lines);
+    }
+    strcar((*p)->lines, ", ");
+    strcat((*p)->lines, iota(line_num));
+  } else if (compare < 0) { tree_addnode(t, &(*p)->left, word, line_num);
   } else {
-    tree_addnode(t, &(*p)->right, word);
+    tree_addnode(t, &(*p)->right, word, line_num);
+  }
+  return *p;
+}*/
+
+static tnode* tree_addnode(tree* t, tnode** p, const char* word, int line_num) {
+  int compare;
+  
+  if (*p == NULL) {
+    *p = tnode_create(word, line_num);
+  } else if ((compare = strcmp(word, (*p)->word)) == 0) {
+    (*p)->count++;
+    inode_append((*p)->line_node, line_num);
+  } else if (compare < 0) { tree_addnode(t, &(*p)->left, word, line_num);
+  } else {
+    tree_addnode(t, &(*p)->right, word, line_num);
+  }
+  return *p;
+}
+
+static tnode* tree_addnode_n(tree* t, tnode** p, const char* word, int n, int line_num) {
+  int compare;
+  
+  if (*p == NULL) {
+    *p = tnode_create(word, line_num);
+  } else if ((compare = strncmp(word, (*p)->word, n)) == 0) {
+    (*p)->count++;
+  } else if (compare < 0) { tree_addnode_n(t, &(*p)->left, word,n, line_num);
+  } else {
+    tree_addnode_n(t, &(*p)->right, word, n , line_num);
   }
   return *p;
 }
@@ -90,9 +157,9 @@ static tnode* tree_addnode(tree* t, tnode** p, const char* word) {
 //====================================================================
 static char* str_process(char* s, char* t) {
   char* p = s;
-  char ignore[] = "\'\".,;;?!()/’";
+  char ignore[] = "\'\".,;?!()`'/-";
   while (*t != '\0') {
-    if (strchr(ignore, *t) == NULL || (*t == '\'' && (p != s || p != s + strlen(s) - 1))) {
+    if (strchr(ignore, *t) == NULL && (*t != '\'' && (p != s || p != s + strlen(s) - 1))) {
       *p++ = tolower(*t);
     }
     ++t;
@@ -102,13 +169,13 @@ static char* str_process(char* s, char* t) {
 }
 
 //====================================================================
-tnode* tree_add(tree* t, char* word) {
+tnode* tree_add(tree* t, char* word, int line_num) {
   char buf[100];
   
   if (word == NULL) { return NULL; }
   str_process(buf, word);
   
-  tnode* p = tree_addnode(t, &(t->root), buf);
+  tnode* p = tree_addnode(t, &(t->root), buf, line_num);
   t->size++;
 
   return p;
@@ -131,6 +198,47 @@ static void tree_printnodes(tree* t, tnode* p) {
   tree_printnodes(t, p->left);
   tree_printme(t, p);
   tree_printnodes(t, p->right);
+}
+
+static void tree_printnode_lines(tree* t, tnode* p) {
+  if(p->count > 1) {printf("%5d -- ", p->count);}
+  else {
+    printf("         ");
+  }
+  if(FIRST_N)  {
+    char buf[100];
+    memset(buf,0,sizeof(buf));
+    strncpy(buf, p->word, N_CHARS);
+    printf("%s", buf);
+    if(strlen(buf) >= N_CHARS) {printf(". . .");}
+  }
+  else {printf("%-18s", p->word);}
+  
+  if (p->line_node != NULL) {
+    printf(" [");
+    inode* plines= p->line_node;
+    while(plines!=NULL){
+      printf("%d", plines->line_num);
+      if(plines->next != NULL){
+        printf(", ");
+      }
+      plines= plines->next;
+    }
+    printf("]\n");
+  }
+}
+
+static void tree_printnode_six(tree* t, tnode* p) {
+  static char prev[BUFSIZ];
+  static bool firsttime = true;
+  if (firsttime) {
+    memset(prev, 0, sizeof(prev));
+    strcpy(prev, p->word);
+    firsttime = false;
+  }
+  if(strncmp(prev,p->word, 2) != 0) {printf("\n");}
+  strcpy(prev, p->word);
+  printf("%s ", p->word);
 }
 
 //====================================================================
@@ -161,7 +269,19 @@ static void tree_printnodes_reverseorder(tree* t, tnode* p) {
 }
 
 //====================================================================
-//void tree_print_levelorder(tree* t);
+static void tree_printnodes_linetest(tree* t, tnode* p){
+  if (p == NULL) { return; }
+  tree_printnodes_linetest(t, p->left);
+  tree_printnode_lines(t, p);
+  tree_printnodes_linetest(t, p->right);
+}
+
+static void  tree_printnodes_sixtest(tree* t, tnode* p){
+  if(p == NULL) {return;}
+  tree_printnodes_sixtest(t, p->left);
+  tree_printnode_six(t, p);
+  tree_printnodes_sixtest(t,p->right);
+}
 
 //====================================================================
 void tree_print(tree* t)              { tree_printnodes(t, t->root);               printf("\n"); }
@@ -178,16 +298,15 @@ void tree_print_reverseorder(tree* t) { tree_printnodes_reverseorder(t, t->root)
 //====================================================================
 void tree_test(tree* t) {
   printf("=============== TREE TEST =================================\n");
-  printf("\n\nprinting in order...========================================\n");
-  tree_print(t);
-  printf("end of printing in order...=====================================\n\n");
 
-  /*printf("\n\nprinting in reverse order...================================\n");
-  tree_print_reverseorder(t);
-  printf("end of printing in reverse order...=============================\n\n");
-  printf("tree size is: %zu\n", tree_size(t));
-  */
-  
+  printf("\n\n6.2 test...========================================\n");
+  tree_printnodes_sixtest(t, t->root);
+  printf("end of 6.2 test...=====================================\n\n");
+
+  printf("\n\n6.3 test...========================================\n");
+  tree_printnodes_linetest(t, t->root);
+  printf("end of 6.3 test...=====================================\n\n");
+
   printf("clearing tree...\n");
   tree_clear(t);
   printf("after clearing tree, size is: %zu\n", tree_size(t));
@@ -198,7 +317,7 @@ void tree_test(tree* t) {
 
 //====================================================================
 tree* tree_from_file(int argc, const char* argv[]) {
-  if (argc != 2) { return NULL; }
+  if (argc != 2 && argc != 3) { return NULL; }
 
   FILE* fin;
   const char* filename = argv[1];
@@ -207,211 +326,55 @@ tree* tree_from_file(int argc, const char* argv[]) {
     exit(1);
   }
 
-  char buf[BUFSIZ];
-  char delims[] = " \n";
-  int size = 0;
-  memset(buf, 0, sizeof(buf));
-
-  tree* t = tree_create();
-  while (fgets(buf, BUFSIZ, fin)) {
-    char* word = strtok(buf, delims);
-   // if(isNoise(word)==0){//6.3
-    tree_add(t, word);
-    ++size;
-   // }
-    while ((word = strtok(NULL, delims)) != NULL) {
-      //if(isNoise(word)==0){//6.3
-      tree_add(t, word);
-      ++size;
-      //}
+  int n;
+  if(argc ==3){
+    n = atoi(argv[2]);
+    if (n > 0){
+      FIRST_N = true;
+      N_CHARS = n;
     }
   }
-  printf("%d words added...\n", size);
-  fclose(fin);
+  
+  tree* t = tree_from_stream(fgets, fin);
 
   return t;
 }
 
 
 //====================================================================
-int getch(void);
-void ungetch(int);
-
-int getword(char *word, int lim) {
-    int c;
-    char *w = word;
-    static int lineBeginning = 1; /* 1 at beginning of a new line */
-    static int afterSlash = 0; /* 1 after '\' */
-    int afterStar = 0; /* 1 after '*' */
-
-    if(isspace(c = getch()))
-        afterSlash = 0;
-    while(isspace(c)) {
-        if(c == '\n')
-            lineBeginning = 1;
-        c = getch();
-    }
-
-    if(c != EOF)
-        *w++ = c;
-
-    if(c == '#' && lineBeginning == 1) { /* Preprocessor directive */
-        while((c = getch()) != '\n' && c != EOF) /* Go to end of line */
-            ;
-        return getword(word, lim); /* Start over */
-    }
-    lineBeginning = 0;
-
-    if(c == '\\') /* Set afterSlash flag */
-        afterSlash = afterSlash ? 0 : 1; /* Ignore '\\' comment */
-
-    else if(c == '/' ) {
-        if((c = getch()) == '*' && !afterSlash) { /* Begin comment */
-            while((c = getch()) != EOF) {
-                if(c == '/') {
-                    if(afterStar) /* End comment */
-                        return getword(word, lim); /* Start over */
-                }
-                else if(c == '*' && !afterSlash)
-                    afterStar = 1;
-                else if(c == '\\')
-                    afterSlash = afterSlash ? 0 : 1; /* Ignore '\\' comments */
-                else {
-                    afterStar = 0;
-                    afterSlash = 0;
-                }
-            }
-        } /* End comment */
-
-        afterSlash = 0; /* Not after slash anymore */
-        if(c != EOF)
-            ungetch(c);
-    }
-
-    else if(c == '\"') {
-        if(!afterSlash) { /* String literal */
-            --w; /* Reset w */
-            while((c = getch()) != EOF) {
-                if(c == '\"' && !afterSlash)
-                    break;
-                else if(c == '\\')
-                    afterSlash = afterSlash ? 0 : 1; /* Ignore '\\' comments */
-                else
-                    afterSlash = 0;
-                *w++ = c;
-            }
-            *w = '\0';
-            if(c == EOF)
-                return EOF;
-            else
-                return getword(word, lim); /* Start over. */
-        }
-        afterSlash = 0; /* Not after a slash anymore. */
-    }
-
-    if(!isalpha(c) && c != '_') { /* It's a symbol. */
-        *w = '\0';
-        if(c != '\\')
-            afterSlash = 0;
-        return c;
-    }
-
-    /* Reset this flag since a slash would have just returned. */
-    afterSlash = 0;
-
-    for( ; --lim > 0; ++w) /* It's a word or letter. */
-        if(!isalnum(*w = getch()) && *w != '_') {
-            ungetch(*w);
-            break;
-        }
-    *w = '\0';
-    return word[0];
-}
-
-char buf[BUFSIZ];
-int bufp = 0;
-
-int getch(void)
-{
-    return (bufp>0) ? buf[--bufp] :getchar();
-}
-
-void ungetch(int c)
-{
-    if (bufp >= BUFSIZ)
-        printf("ungetch: too many characters\n");
-        else buf[bufp++] = c;
-}
-
-void treeprint(struct tnode *p, int n) {
-    static int printPrevious = 1;
-    static struct tnode *previous;
-
-    if (p != NULL) {
-        treeprint(p->left, n);
-
-        /* n is how many characters we should compare, if it is
-         * 0 then we just print all of them */
-        if (n == 0)
-            /* Print all the words. */
-            printf("%4d %s\n", p->count, p->word);
-        else {
-            if (previous != NULL) {
-                if (strncmp(previous->word, p->word, n) == 0) {
-                    if (printPrevious == PRINTPREVIOUS_NEWGROUP) {
-                        /* If we find a new group, add an extra newline to separate the
-                         * groups in the output */
-                        printf("\n%4d %s\n", previous->count, previous->word);
-                        printPrevious = PRINTPREVIOUS_NO;
-                    } else if (printPrevious == PRINTPREVIOUS_YES) {
-                        /* If we find another word in the current group, just add a single
-                         * newline. */
-                        printf("%4d %s\n", previous->count, previous->word);
-                        printPrevious = PRINTPREVIOUS_NO;
-                    }
-                    /* We do not print the current word by default as if it doesn't have the same
-                     * root as the next value then that would be a mistake. Hence why we need
-                     * printPrevious. */
-                    printf("%4d %s\n", p->count, p->word);
-                } else
-                    printPrevious = PRINTPREVIOUS_NEWGROUP;
-            }
-            /* Keep track of previous word. */
-            previous = p;
-        }
-
-        treeprint(p->right, n);
-    }
-}
 
 
-#define DEFAULT 6
-
-void wordFreq(int argc, const char* argv[])
-{
-  int countComp;
-  if(argc == 2)
-    countComp = DEFAULT;
-  else if(argc == 3)
-    countComp = atoi(argv[2]);
-  else{
-    fprintf(stderr, "Invalid Arguments. \n");
-    exit(0);
-  }
-
-  tree* t = tree_from_file(argc, argv);
-
-  treeprint(t->root,countComp);
-
-  tree_delete(t);
-}
-
-char* noise[19] = {"a","an","and","are","for","from","in","is","it","not",
-                "of","on","or","that","the","this","to","was","with"};
+char* noise[27] = {"a","an","and","are","for","from","in","is","it","not",
+                   "of","on","or","that","the","this","to","was","with",
+                   "he","him","she", "her", "they", "them", "were", "you"};
 
 int isNoise(char* word){
-for(int i =0; i<19; i++){
+for(int i =0; i<27; i++){
   if(strcmp(word,noise[i])==0) return 1;
 }
   return 0;
+}
+
+tree* tree_from_stream(char* (*fgets)(char*, int, FILE*), FILE* fin){
+  char buf[BUFSIZ];
+  char delims[] = " \n";
+  int size = 0;
+  memset(buf, 0, sizeof(buf));
+  
+  int line_num = 1;
+  tree* t = tree_create();
+  while (fgets(buf, BUFSIZ, fin)){
+    char* word = strtok(buf, delims);
+    tree_add(t, word, line_num);
+    ++size;
+  while(((word = strtok(NULL, delims)) != NULL)){
+    tree_add(t, word, line_num);
+    ++size;
+    }
+    ++line_num;
+  }
+  
+  printf("\n%d words added... \n\n", size);
+  if (fin != stdin){ fclose(fin); }
+  return t;
 }
